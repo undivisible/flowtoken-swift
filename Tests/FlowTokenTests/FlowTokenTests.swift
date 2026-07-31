@@ -8,9 +8,12 @@ import Testing
   #expect(Tokenizer.tokens(for: "stream", separator: .diff) == ["stream"])
 }
 
-@Test func diffStreamingOnlyAppendsNewContent() {
+@Test func diffStreamingCoalescesDuringAnActiveFade() {
   var accumulator = TokenAccumulator()
   accumulator.update(input: "Hello", separator: .diff)
-  accumulator.update(input: "Hello, world", separator: .diff)
-  #expect(accumulator.tokens.map(\.text) == ["Hello", ", world"])
+  accumulator.update(input: "Hello, world", separator: .diff, coalesceActiveDiff: true)
+  #expect(accumulator.tokens.map(\.text) == ["Hello, world"])
+
+  accumulator.update(input: "Hello, world again", separator: .diff)
+  #expect(accumulator.tokens.map(\.text) == ["Hello, world", " again"])
 }

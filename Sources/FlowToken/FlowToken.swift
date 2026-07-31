@@ -39,6 +39,8 @@ public struct TokenizedText: View {
   public let animationDuration: TimeInterval
 
   @State private var accumulator = TokenAccumulator()
+  @State private var diffFadeActive = false
+  @State private var diffFadeTask: Task<Void, Never>?
 
   public init(
     _ input: String,
@@ -61,15 +63,29 @@ public struct TokenizedText: View {
       }
     }
     .animation(
-      animation == .none ? nil : .easeInOut(duration: animationDuration),
+      animation == .none ? nil : .easeOut(duration: animationDuration),
       value: accumulator.tokens
     )
     .onAppear { updateTokens() }
     .onChange(of: input) { _ in updateTokens() }
+    .onDisappear { diffFadeTask?.cancel() }
   }
 
   private func updateTokens() {
-    accumulator.update(input: input, separator: separator)
+    let changed = accumulator.update(
+      input: input,
+      separator: separator,
+      coalesceActiveDiff: separator == .diff && diffFadeActive
+    )
+    guard changed, separator == .diff, animation != .none, !diffFadeActive else { return }
+    diffFadeActive = true
+    diffFadeTask?.cancel()
+    let duration = animationDuration
+    diffFadeTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+      guard !Task.isCancelled else { return }
+      diffFadeActive = false
+    }
   }
 }
 
@@ -102,7 +118,7 @@ public struct AnimatedMarkdown: View {
 
   private func reveal() {
     visible = false
-    withAnimation(animation == .none ? nil : .easeInOut(duration: animationDuration)) {
+    withAnimation(animation == .none ? nil : .easeOut(duration: animationDuration)) {
       visible = true
     }
   }
@@ -116,18 +132,28 @@ struct Token: Identifiable, Equatable {
 struct TokenAccumulator {
   private(set) var tokens: [Token] = []
 
-  mutating func update(input: String, separator: FlowTokenSeparator) {
+  @discardableResult
+  mutating func update(
+    input: String,
+    separator: FlowTokenSeparator,
+    coalesceActiveDiff: Bool = false
+  ) -> Bool {
     if separator == .diff {
       let assembled = tokens.map(\.text).joined()
       guard input.hasPrefix(assembled) else {
         tokens = input.isEmpty ? [] : [Token(id: UUID(), text: input)]
-        return
+        return true
       }
       let addition = String(input.dropFirst(assembled.count))
       if !addition.isEmpty {
-        tokens.append(Token(id: UUID(), text: addition))
+        if coalesceActiveDiff, let last = tokens.last {
+          tokens[tokens.count - 1] = Token(id: last.id, text: last.text + addition)
+        } else {
+          tokens.append(Token(id: UUID(), text: addition))
+        }
+        return true
       }
-      return
+      return false
     }
 
     let next = Tokenizer.tokens(for: input, separator: separator)
@@ -137,6 +163,7 @@ struct TokenAccumulator {
     tokens = next.enumerated().map { index, text in
       Token(id: index < stableCount ? tokens[index].id : UUID(), text: text)
     }
+    return true
   }
 }
 
